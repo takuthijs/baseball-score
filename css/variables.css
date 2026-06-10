@@ -1,0 +1,122 @@
+/* ========================================
+   CSS Design Tokens — Light Theme
+   草野球スコアブック PWA
+   ======================================== */
+
+:root {
+  /* ── Colors (Light Theme) ── */
+  --color-bg:           #F5F7FA;
+  --color-bg-secondary: #FFFFFF;
+  --color-bg-tertiary:  #EEF1F5;
+  --color-bg-elevated:  #FFFFFF;
+  
+  --color-primary:      #2B8A7E;
+  --color-primary-dim:  rgba(43, 138, 126, 0.10);
+  --color-primary-glow: rgba(43, 138, 126, 0.20);
+  
+  --color-accent:       #E84855;
+  --color-accent-dim:   rgba(232, 72, 85, 0.10);
+  
+  --color-hit:          #1E88C7;
+  --color-hit-dim:      rgba(30, 136, 199, 0.10);
+  
+  --color-out:          #8C9BAA;
+  --color-out-dim:      rgba(140, 155, 170, 0.10);
+  
+  --color-walk:         #3A9D6F;
+  --color-walk-dim:     rgba(58, 157, 111, 0.10);
+  
+  --color-error:        #E8901E;
+  --color-error-dim:    rgba(232, 144, 30, 0.10);
+  
+  --color-homerun:      #D4A017;
+  --color-homerun-dim:  rgba(212, 160, 23, 0.12);
+  
+  --color-success:      #43A047;
+  --color-danger:       #E53935;
+  --color-warning:      #F57C00;
+  
+  --color-text:         #1A2233;
+  --color-text-secondary: #556270;
+  --color-text-muted:   #8C9BAA;
+  --color-text-inverse: #FFFFFF;
+  
+  --color-border:       rgba(0, 0, 0, 0.08);
+  --color-border-strong: rgba(0, 0, 0, 0.15);
+  --color-divider:      rgba(0, 0, 0, 0.06);
+  
+  --color-overlay:      rgba(0, 0, 0, 0.45);
+  
+  /* ── Gradients ── */
+  --gradient-primary:   linear-gradient(135deg, #2B8A7E, #1E88C7);
+  --gradient-accent:    linear-gradient(135deg, #E84855, #FF8E53);
+  --gradient-dark:      linear-gradient(180deg, #F5F7FA, #FFFFFF);
+  --gradient-card:      linear-gradient(145deg, #FFFFFF, #F8FAFC);
+  --gradient-status:    linear-gradient(90deg, rgba(43, 138, 126, 0.05), rgba(30, 136, 199, 0.05));
+  
+  /* ── Typography ── */
+  --font-family:        'Inter', 'Noto Sans JP', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-mono:          'SF Mono', 'Fira Code', monospace;
+  
+  --font-size-xs:       0.6875rem;  /* 11px */
+  --font-size-sm:       0.75rem;    /* 12px */
+  --font-size-base:     0.875rem;   /* 14px */
+  --font-size-md:       1rem;       /* 16px */
+  --font-size-lg:       1.125rem;   /* 18px */
+  --font-size-xl:       1.375rem;   /* 22px */
+  --font-size-2xl:      1.75rem;    /* 28px */
+  --font-size-3xl:      2.25rem;    /* 36px */
+  
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold:   700;
+  
+  --line-height-tight:  1.2;
+  --line-height-normal: 1.5;
+  --line-height-relaxed: 1.7;
+  
+  /* ── Spacing ── */
+  --space-2xs:  0.25rem;  /* 4px */
+  --space-xs:   0.375rem; /* 6px */
+  --space-sm:   0.5rem;   /* 8px */
+  --space-md:   0.75rem;  /* 12px */
+  --space-base: 1rem;     /* 16px */
+  --space-lg:   1.25rem;  /* 20px */
+  --space-xl:   1.5rem;   /* 24px */
+  --space-2xl:  2rem;     /* 32px */
+  --space-3xl:  3rem;     /* 48px */
+  
+  /* ── Border Radius ── */
+  --radius-sm:   6px;
+  --radius-md:   10px;
+  --radius-lg:   14px;
+  --radius-xl:   20px;
+  --radius-full: 9999px;
+  
+  /* ── Shadows ── */
+  --shadow-sm:   0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md:   0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-lg:   0 8px 24px rgba(0, 0, 0, 0.10), 0 4px 8px rgba(0, 0, 0, 0.06);
+  --shadow-glow: 0 0 16px var(--color-primary-glow);
+  
+  /* ── Transitions ── */
+  --transition-fast:    150ms ease;
+  --transition-normal:  250ms ease;
+  --transition-slow:    400ms ease;
+  --transition-spring:  400ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  
+  /* ── Z-Index ── */
+  --z-base:     1;
+  --z-dropdown: 10;
+  --z-sticky:   20;
+  --z-fixed:    30;
+  --z-modal:    40;
+  --z-toast:    50;
+  
+  /* ── Layout ── */
+  --status-bar-height: 100px;
+  --input-panel-height: 220px;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-top: env(safe-area-inset-top, 0px);
+}

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#F5F7FA">
+  <meta name="description" content="草野球の試合をリアルタイムに記録できるスコアブックアプリ。片手で素早く操作可能。">
+  
+  <title>ScoreBook - 草野球スコア管理</title>
+  
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  
+  <!-- CSS -->
+  <link rel="stylesheet" href="./css/variables.css">
+  <link rel="stylesheet" href="./css/base.css">
+  <link rel="stylesheet" href="./css/components.css">
+  <link rel="stylesheet" href="./css/pages.css">
+  
+  <!-- Dexie.js (IndexedDB wrapper) -->
+  <script src="./lib/dexie.min.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- Loading -->
+    <div style="display:flex;align-items:center;justify-content:center;min-height:100dvh;flex-direction:column;gap:1rem;">
+      <div style="font-size:3rem;">⚾</div>
+      <div style="color:var(--color-text-muted);font-size:0.875rem;">読み込み中...</div>
+    </div>
+  </div>
+  
+  <!-- Toast Container -->
+  <div class="toast-container"></div>
+  
+  <!-- App JS (ES Modules) -->
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
