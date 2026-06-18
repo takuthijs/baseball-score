@@ -61,11 +61,6 @@ export async function renderGameSetup(container, navigate, params = {}) {
             showToast('打順に選手を追加してください', 'error');
             return;
           }
-          if (lineup.some((id) => !lineupPositions[id])) {
-            showToast('全選手の守備位置を設定してください', 'error');
-            return;
-          }
-          
           const gameId = await DB.addGame({
             teamId,
             opponentName: opponentName.trim(),
@@ -230,40 +225,50 @@ export async function renderGameSetup(container, navigate, params = {}) {
     lineupSection.appendChild(lineupList);
 
     // 未選択メンバー（チームメンバー＋助っ人）
-    const availableMembers = members.filter(m => !lineup.includes(m.id));
-    const availableGuests = guestPlayers.filter(g => !lineup.includes(g.id));
+    if (members.length > 0 || guestPlayers.length > 0) {
+      const activeMembers = members.filter(m => m.isActive !== false);
+      const inactiveMembers = members.filter(m => m.isActive === false);
 
-    if (availableMembers.length > 0 || availableGuests.length > 0) {
-      const chips = [
-        ...availableMembers.map(m =>
-          el('button', {
-            className: 'available-player-chip',
-            textContent: `${m.number ? '#' + m.number + ' ' : ''}${m.name}`,
-            onClick: () => {
-              lineup.push(m.id);
-              lineupPositions[m.id] = lineupPositions[m.id] || '';
-              renderBody();
-            },
-          })
-        ),
-        ...availableGuests.map(g =>
-          el('button', {
-            className: 'available-player-chip guest-chip',
-            onClick: () => {
-              lineup.push(g.id);
-              lineupPositions[g.id] = lineupPositions[g.id] || '';
-              renderBody();
-            },
-          }, [
-            el('span', { textContent: g.name }),
-            el('span', { className: 'guest-badge', textContent: '助っ人' }),
-          ])
-        ),
+      function makeChip(id, label, extraClass, children) {
+        const isSelected = lineup.includes(id);
+        const cls = `available-player-chip${extraClass ? ' ' + extraClass : ''}${isSelected ? ' selected' : ''}`;
+        const toggle = () => {
+          if (isSelected) {
+            lineup.splice(lineup.indexOf(id), 1);
+            delete lineupPositions[id];
+          } else {
+            lineup.push(id);
+            lineupPositions[id] = lineupPositions[id] || '';
+          }
+          renderBody();
+        };
+        return children
+          ? el('button', { className: cls, onClick: toggle }, children)
+          : el('button', { className: cls, textContent: label, onClick: toggle });
+      }
+
+      const activeChips = [
+        ...activeMembers.map(m => makeChip(m.id, `${m.number ? '#' + m.number + ' ' : ''}${m.name}`, null, null)),
+        ...guestPlayers.map(g => makeChip(g.id, null, 'guest-chip', [
+          el('span', { textContent: g.name }),
+          el('span', { className: 'guest-badge', textContent: '助っ人' }),
+        ])),
       ];
-      lineupSection.appendChild(el('div', { style: { marginTop: 'var(--space-md)' } }, [
-        el('div', { className: 'input-label', textContent: 'タップして打順に追加' }),
-        el('div', { className: 'available-players' }, chips),
-      ]));
+
+      const wrap = el('div', { style: { marginTop: 'var(--space-md)' } }, [
+        el('div', { className: 'input-label', textContent: 'タップして打順に追加・削除' }),
+        el('div', { className: 'available-players' }, activeChips),
+      ]);
+
+      if (inactiveMembers.length > 0) {
+        const inactiveChips = inactiveMembers.map(m =>
+          makeChip(m.id, `${m.number ? '#' + m.number + ' ' : ''}${m.name}`, 'inactive', null)
+        );
+        wrap.appendChild(el('div', { className: 'input-label inactive-members-label', textContent: '不参加メンバー（タップで追加可）' }));
+        wrap.appendChild(el('div', { className: 'available-players' }, inactiveChips));
+      }
+
+      lineupSection.appendChild(wrap);
     }
 
     // 助っ人追加フォーム

@@ -342,6 +342,7 @@ function renderInputPanel(state) {
       ]),
       el('span', { className: 'batter-arrow', textContent: '▼' }),
     ]),
+    el('button', { className: 'btn btn-sm btn-secondary pinch-hit-btn', textContent: '代打', onClick: () => showPinchHitterModal(state, currentBatterIdx) }),
   ]);
   panel.appendChild(batterRow);
 
@@ -884,6 +885,65 @@ function showBatterSelectModal(state) {
         isCurrent ? el('span', { className: 'badge badge-primary', textContent: '次の打者' }) : el('span'),
       ]));
     });
+  });
+}
+
+function showPinchHitterModal(state, currentBatterIdx) {
+  const lineup = currentGame.lineup || [];
+  const currentBatterId = lineup[currentBatterIdx];
+  const currentBatter = currentMembers.find(m => m.id === currentBatterId);
+  const available = currentMembers.filter(m => !lineup.includes(m.id));
+
+  createModal('代打', (content, close) => {
+    content.appendChild(el('div', {
+      className: 'text-secondary',
+      style: { marginBottom: 'var(--space-base)', fontSize: 'var(--font-size-sm)' },
+      textContent: `${currentBatter?.name || '不明'} の代打として打順に入ります`,
+    }));
+    if (available.length === 0) {
+      content.appendChild(el('div', { className: 'text-muted', textContent: '代打可能な選手がいません。助っ人追加はホーム→試合設定から行えます。' }));
+      return;
+    }
+    for (const m of available) {
+      const isGuest = typeof m.id === 'string';
+      content.appendChild(el('button', {
+        className: 'list-item',
+        onClick: async () => {
+          const newLineup = [...lineup];
+          newLineup[currentBatterIdx] = m.id;
+          const newPositions = { ...currentGame.lineupPositions };
+          if (!newPositions[m.id]) newPositions[m.id] = '';
+          await DB.updateGame(currentGameId, { lineup: newLineup, lineupPositions: newPositions });
+          currentGame.lineup = newLineup;
+          currentGame.lineupPositions = newPositions;
+          await DB.addPlay({
+            gameId: currentGameId,
+            inning: state.inning,
+            side: state.side,
+            relatedAtBatId: null,
+            action: 'playerChange',
+            runner: '',
+            runnerId: null,
+            resultStatus: 'success',
+            outPosition: null,
+            note: `代打: ${currentBatter?.name || '不明'} → ${m.name}`,
+            order: await DB.getNextOrder(currentGameId),
+          });
+          batterIndexOverride = currentBatterIdx;
+          close();
+          showToast(`${m.name} が代打に入りました`);
+          await refreshAll();
+        },
+      }, [
+        el('div', { className: 'player-avatar player-avatar-sm', textContent: m.number || '?' }),
+        el('div', { className: 'list-item-content' }, [
+          el('div', { className: 'list-item-title' }, isGuest
+            ? [el('span', { textContent: m.name }), el('span', { className: 'guest-badge', textContent: '助っ人' })]
+            : [el('span', { textContent: m.name })]
+          ),
+        ]),
+      ]));
+    }
   });
 }
 

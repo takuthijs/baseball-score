@@ -139,11 +139,17 @@ export function computeGameState(events, game, members, opponentScores = [], upT
 
       // アウト処理: 明示的アウト or 盗塁失敗
       if (event.action === 'out' && event.resultStatus === 'success') {
-        outs++;
-        removeRunner(resolveRunnerBase(event, runners), runners);
+        const outBase = resolveRunnerBase(event, runners);
+        if (outBase !== null) {
+          outs++;
+          removeRunner(outBase, runners);
+        }
       } else if (event.action === 'steal' && event.resultStatus === 'failure') {
-        outs++;
-        removeRunner(resolveRunnerBase(event, runners), runners);
+        const stealBase = resolveRunnerBase(event, runners);
+        if (stealBase !== null) {
+          outs++;
+          removeRunner(stealBase, runners);
+        }
       }
 
       if (outs >= 3) {
@@ -325,9 +331,11 @@ function processPlayEvent(event, runners, state, inningScores, inning, memberMap
   } else if (event.action === 'advanceTwo') {
     advanceRunnerTwice(resolvedBase, runners, inningScores, inning);
   } else if (event.action === 'score') {
-    // 生還
-    removeRunner(resolvedBase, runners);
-    addInningScore(inningScores, inning, 1);
+    // 生還 (resolvedBase が null = 既に placeBatterOnBase で処理済みのため二重加算しない)
+    if (resolvedBase !== null) {
+      removeRunner(resolvedBase, runners);
+      addInningScore(inningScores, inning, 1);
+    }
   } else if (event.action === 'wildPitch' || event.action === 'passedBall' || event.action === 'balk') {
     const isTwoBaseAdvance = typeof event.note === 'string' && event.note.includes('[ADVANCE_TWO]');
     advanceAllRunners(runners, inningScores, inning, isTwoBaseAdvance ? 2 : 1);

@@ -157,6 +157,62 @@
 .member-actions {
   display: flex;
   gap: var(--space-xs);
+  align-items: center;
+}
+
+.member-item.inactive {
+  opacity: 0.55;
+}
+
+.member-item.inactive .member-number {
+  color: var(--color-text-muted);
+}
+
+.member-inactive-badge {
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  padding: 1px 6px;
+  margin-left: var(--space-xs);
+  font-weight: var(--font-weight-normal);
+}
+
+.member-active-toggle {
+  font-size: var(--font-size-xs);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid;
+  white-space: nowrap;
+}
+
+.member-active-toggle.is-active {
+  color: var(--color-success);
+  border-color: var(--color-success);
+  background: rgba(72, 199, 142, 0.1);
+}
+
+.member-active-toggle.is-inactive {
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+  background: var(--color-bg-tertiary);
+}
+
+/* ── Game setup: inactive chips ── */
+.available-player-chip.inactive {
+  opacity: 0.5;
+  border-style: dashed;
+}
+
+.available-player-chip.inactive.selected {
+  opacity: 1;
+}
+
+.inactive-members-label {
+  margin-top: var(--space-md);
+  color: var(--color-text-muted);
 }
 
 /* ────────────────────────────────────────
@@ -257,9 +313,18 @@
 }
 
 .available-player-chip:active {
+  opacity: 0.75;
+}
+
+.available-player-chip.selected {
   background: var(--color-primary-dim);
   border-color: var(--color-primary);
   color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.available-player-chip.selected::before {
+  content: '✓ ';
 }
 
 .guest-chip {
@@ -269,6 +334,12 @@
   border-color: rgba(232, 144, 30, 0.35);
   color: var(--color-error);
   background: var(--color-error-dim);
+}
+
+.guest-chip.selected {
+  background: var(--color-primary-dim);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 .guest-badge {
@@ -593,6 +664,11 @@
 .batter-select-btn .batter-arrow {
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
+}
+
+.pinch-hit-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .mode-toggle {

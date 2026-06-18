@@ -39,9 +39,9 @@ export async function renderTeam(container, navigate, params = {}) {
           el('span', { textContent: `メンバー (${members.length}人)` }),
         ]),
         
-        // Member List
-        ...members.map(m => createMemberItem(m, container, navigate)),
-        
+        // Member List (アクティブ優先で表示)
+        ...sortMembersByActive(members).map(m => createMemberItem(m, container, navigate)),
+
         // Add Member Button
         el('button', { 
           className: 'btn btn-secondary btn-block', 
@@ -65,21 +65,34 @@ export async function renderTeam(container, navigate, params = {}) {
 
 function createMemberItem(member, container, navigate) {
   const posLabel = formatMemberCategoryLabel(member);
-  
-  return el('div', { className: 'member-item' }, [
+  const isActive = member.isActive !== false;
+
+  return el('div', { className: `member-item${isActive ? '' : ' inactive'}` }, [
     el('div', { className: 'member-number', textContent: member.number || '-' }),
     el('div', { className: 'member-info' }, [
-      el('div', { className: 'member-name', textContent: member.name }),
+      el('div', { className: 'member-name' }, [
+        el('span', { textContent: member.name }),
+        !isActive ? el('span', { className: 'member-inactive-badge', textContent: '不参加' }) : el('span'),
+      ]),
       el('div', { className: 'member-position', textContent: posLabel }),
     ]),
     el('div', { className: 'member-actions' }, [
-      el('button', { 
-        className: 'btn btn-ghost btn-sm', 
+      el('button', {
+        className: `btn btn-ghost btn-sm member-active-toggle ${isActive ? 'is-active' : 'is-inactive'}`,
+        textContent: isActive ? '参加中' : '不参加',
+        title: isActive ? 'タップで不参加にする' : 'タップで参加中にする',
+        onClick: async () => {
+          await DB.updateMember(member.id, { isActive: !isActive });
+          renderTeam(container, navigate, { teamId: currentTeamId });
+        },
+      }),
+      el('button', {
+        className: 'btn btn-ghost btn-sm',
         textContent: '✏️',
         onClick: () => showMemberModal(container, navigate, member),
       }),
-      el('button', { 
-        className: 'btn btn-ghost btn-sm', 
+      el('button', {
+        className: 'btn btn-ghost btn-sm',
         textContent: '🗑',
         onClick: async () => {
           if (confirm(`${member.name} を削除しますか？`)) {
@@ -91,6 +104,14 @@ function createMemberItem(member, container, navigate) {
       }),
     ]),
   ]);
+}
+
+function sortMembersByActive(members) {
+  return [...members].sort((a, b) => {
+    const aActive = a.isActive !== false ? 0 : 1;
+    const bActive = b.isActive !== false ? 0 : 1;
+    return aActive - bActive;
+  });
 }
 
 function renderTeamCreate(container, navigate) {
