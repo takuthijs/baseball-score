@@ -1,11 +1,12 @@
 /**
  * 試合記録画面 (メイン)
  */
-import { el, showToast, formatInning, escapeHtml } from '../utils/helpers.js';
-import { 
+import { el, showToast, formatInning, escapeHtml, createModal, showConfirmModal } from '../utils/helpers.js';
+import {
   AT_BAT_RESULTS, PLAY_ACTIONS, BASES, POSITIONS,
   BATTED_BALL_POSITIONS, BATTED_BALL_ZONES,
-  getResultLabel, getResultShort, getResultClass, isOutResult, isOnBaseResult, isBattedOutResult, isHitResult
+  getResultLabel, getResultShort, getResultClass, isOutResult, isOnBaseResult, isBattedOutResult, isHitResult,
+  NOTE_SYS_INNING_CHANGE, NOTE_FLAG_ADVANCE_TWO, NOTE_FLAG_DROPPED_THIRD_STRIKE,
 } from '../utils/constants.js';
 import { computeGameState, detectInningChanges } from '../models/state.js';
 import * as DB from '../db.js';
@@ -15,7 +16,10 @@ let currentGame = null;
 let currentTeam = null;
 let currentMembers = [];
 let currentState = null;
+let currentEvents = [];
 let recordMode = 'detailed';
+let batterIndexOverride = null;
+let isRecording = false;
 
 function getTeamAttackSide() {
   return currentGame?.isHome ? 'bottom' : 'top';
@@ -26,7 +30,7 @@ function getOpponentAttackSide() {
 }
 
 function isSystemEvent(event) {
-  return event?.type === 'play' && event?.action === 'other' && typeof event?.note === 'string' && event.note.startsWith('[SYS]');
+  return event?.type === 'play' && event?.action === 'other' && typeof event?.note === 'string' && event.note.startsWith(NOTE_SYS_INNING_CHANGE);
 }
 
 export async function renderGame(container, navigate, params = {}) {
@@ -50,6 +54,7 @@ export async function renderGame(container, navigate, params = {}) {
 async function refreshAll() {
   const events = await DB.getAllEvents(currentGameId);
   const opponentScores = await DB.getOpponentScores(currentGameId);
+  currentEvents = events;
   currentState = computeGameState(events, currentGame, currentMembers, opponentScores);
   renderStatusBar(currentState);
   renderEventLog(events, currentState);
@@ -174,7 +179,7 @@ function createAtBatLogItem(event, allEvents, eventIndex) {
     const location = [battedType, pos, zone].filter(Boolean).join(' ');
     if (location) detailText += `(${location}) `;
   }
-  if (event.note) detailText += event.note.replace('[DROPPED_THIRD_STRIKE_SUCCESS]', '').trim();
+  if (event.note) detailText += event.note.replace(NOTE_FLAG_DROPPED_THIRD_STRIKE, '').trim();
 
   const item = el('div', { className: 'event-item at-bat' }, [
     el('div', { className: 'event-number', textContent: `#${event.atBatNumber || ''}` }),
@@ -231,8 +236,8 @@ function createPlayLogItem(event) {
   const runner = currentMembers.find(m => m.id === event.runnerId);
   const runnerName = runner?.name || '';
   const statusText = event.resultStatus === 'success' ? '成功' : '失敗';
-  const cleanNote = (event.note || '').replace('[ADVANCE_TWO]', '').trim();
-  const isTwoAdvance = typeof event.note === 'string' && event.note.includes('[ADVANCE_TWO]');
+  const cleanNote = (event.note || '').replace(NOTE_FLAG_ADVANCE_TWO, '').trim();
+  const isTwoAdvance = typeof event.note === 'string' && event.note.includes(NOTE_FLAG_ADVANCE_TWO);
   let summary = runnerName ? `${runnerName} ${actionLabel}` : actionLabel;
   if (event.runner) summary += ` (${baseLabel})`;
   if (isTwoAdvance) summary += ' [2つ進塁]';
@@ -310,15 +315,23 @@ function renderInputPanel(state) {
     return;
   }
   const lineup = currentGame.lineup || [];
-  const currentBatterIdx = state.currentBatterIndex % lineup.length;
+  const currentBatterIdx = (batterIndexOverride !== null ? batterIndexOverride : state.currentBatterIndex) % lineup.length;
   const currentBatterId = lineup[currentBatterIdx];
   const currentBatter = currentMembers.find(m => m.id === currentBatterId);
+
+  const todayStats = getBatterTodayStats(currentBatterId, currentEvents);
+  const statsLabel = todayStats.ab > 0
+    ? `${todayStats.ab}打数${todayStats.h}安打`
+    : '本日初打席';
 
   // 打者選択行
   const batterRow = el('div', { className: 'input-batter-row' }, [
     el('button', { className: 'batter-select-btn', onClick: () => showBatterSelectModal(state) }, [
       el('div', { className: 'player-avatar player-avatar-sm', textContent: currentBatter?.number || '?' }),
-      el('span', { className: 'batter-name', textContent: currentBatter?.name || '打者を選択' }),
+      el('div', { style: { flex: 1, textAlign: 'left' } }, [
+        el('span', { className: 'batter-name', textContent: currentBatter?.name || '打者を選択' }),
+        el('span', { style: { fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)', marginLeft: 'var(--space-sm)' }, textContent: statsLabel }),
+      ]),
       el('span', { className: 'batter-arrow', textContent: '▼' }),
     ]),
   ]);
@@ -342,16 +355,27 @@ function renderInputPanel(state) {
   }
   panel.appendChild(resultGrid);
 
+  const lastUserEvent = getLastUserEvent(currentEvents);
   const actionsRow = el('div', { className: 'input-actions' }, [
     el('button', { className: 'play-add-btn', textContent: '📋 その他', onClick: () => showMoreResultsModal(currentBatterId, state) }),
     el('button', { className: 'play-add-btn', textContent: '＋ プレー', onClick: () => showPlayInputModal(state, null) }),
     el('button', { className: 'opponent-score-btn', textContent: '🔢 相手得点', onClick: () => showOpponentScoreModal(state) }),
+    el('button', {
+      className: 'play-add-btn undo-btn',
+      textContent: '↩ 取消',
+      disabled: !lastUserEvent,
+      style: !lastUserEvent ? { opacity: '0.35' } : {},
+      onClick: () => lastUserEvent && showUndoModal(lastUserEvent),
+    }),
   ]);
   panel.appendChild(actionsRow);
 }
 
 // ════════════ RECORD AT BAT ════════════
 async function recordAtBat(result, batterId, state) {
+  if (isRecording) return;
+  isRecording = true;
+  setResultButtonsDisabled(true);
   const nextOrder = await DB.getNextOrder(currentGameId);
   const rbi = calculateAutoRBI(result, state.runners);
   const atBat = {
@@ -362,17 +386,23 @@ async function recordAtBat(result, batterId, state) {
   };
 
   if (result === 'strikeout') {
+    isRecording = false;
+    setResultButtonsDisabled(false);
     showStrikeoutOptionsModal(atBat, state);
     return;
   }
 
   if (isBattedOutResult(result) || isHitResult(result) || result === 'doublePlay') {
+    isRecording = false;
+    setResultButtonsDisabled(false);
     showBattedBallLocationModal(atBat, state);
     return;
   }
 
   // 詳細モードで出塁系: 打点確認モーダル
   if (recordMode === 'detailed' && isOnBaseResult(result)) {
+    isRecording = false;
+    setResultButtonsDisabled(false);
     showRBIConfirmModal(atBat, state);
     return;
   }
@@ -427,8 +457,8 @@ function showStrikeoutOptionsModal(atBat, state) {
       onClick: async () => {
         atBat.specialFlags = { ...(atBat.specialFlags || {}), droppedThirdStrikeSuccess };
         atBat.note = note;
-        if (droppedThirdStrikeSuccess && !atBat.note.includes('[DROPPED_THIRD_STRIKE_SUCCESS]')) {
-          atBat.note = `${atBat.note} [DROPPED_THIRD_STRIKE_SUCCESS]`.trim();
+        if (droppedThirdStrikeSuccess && !atBat.note.includes(NOTE_FLAG_DROPPED_THIRD_STRIKE)) {
+          atBat.note = `${atBat.note} ${NOTE_FLAG_DROPPED_THIRD_STRIKE}`.trim();
         }
         close();
         await finalizeAtBatRecord(atBat, state, '三振を記録');
@@ -513,13 +543,19 @@ function showBattedBallLocationModal(atBat, state) {
 }
 
 async function finalizeAtBatRecord(atBat, state, toastMessage = null) {
-  const atBatId = await DB.addAtBat(atBat);
-  if (shouldPromptRunnerOutcome(atBat, state)) {
-    showRunnerOutcomeModal({ ...atBat, id: atBatId }, state, toastMessage || `${getResultLabel(atBat.result)}を記録`);
-    return;
+  try {
+    const atBatId = await DB.addAtBat(atBat);
+    batterIndexOverride = null;
+    if (shouldPromptRunnerOutcome(atBat, state)) {
+      showRunnerOutcomeModal({ ...atBat, id: atBatId }, state, toastMessage || `${getResultLabel(atBat.result)}を記録`);
+      return;
+    }
+    showToast(toastMessage || `${getResultLabel(atBat.result)}を記録`, 'success');
+    await postAtBatCheck();
+  } finally {
+    isRecording = false;
+    setResultButtonsDisabled(false);
   }
-  showToast(toastMessage || `${getResultLabel(atBat.result)}を記録`, 'success');
-  await postAtBatCheck();
 }
 
 function shouldPromptRunnerOutcome(atBat, state) {
@@ -816,49 +852,26 @@ function showThreeOutModal(state) {
 }
 
 // ════════════ MODALS ════════════
-function createModal(title, contentFn) {
-  const overlay = el('div', { className: 'modal-overlay active' });
-  const content = el('div', { className: 'modal-content' }, [
-    el('div', { className: 'modal-handle' }),
-    el('div', { className: 'modal-header' }, [
-      el('h2', { className: 'modal-title', textContent: title }),
-      el('button', { className: 'modal-close', textContent: '✕', onClick: () => overlay.remove() }),
-    ]),
-  ]);
-  contentFn(content, () => overlay.remove());
-  overlay.appendChild(content);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
-  document.body.appendChild(overlay);
-  return overlay;
-}
-
-/** カスタム確認ダイアログ（confirm()の代わり） */
-function showConfirmModal(message, onConfirm, confirmText = '削除する') {
-  createModal('確認', (content, close) => {
-    content.appendChild(el('div', { style: { textAlign: 'center', marginBottom: 'var(--space-xl)', fontSize: 'var(--font-size-md)' }, textContent: message }));
-    content.appendChild(el('div', { style: { display: 'flex', gap: 'var(--space-md)' } }, [
-      el('button', { className: 'btn btn-secondary', style: { flex: 1 }, textContent: 'キャンセル', onClick: () => close() }),
-      el('button', { className: 'btn btn-danger', style: { flex: 1 }, textContent: confirmText, onClick: () => { close(); onConfirm(); } }),
-    ]));
-  });
-}
 
 function showBatterSelectModal(state) {
   createModal('打者選択', (content, close) => {
     const lineup = currentGame.lineup || [];
-    const currentIdx = state.currentBatterIndex % lineup.length;
+    const currentIdx = (batterIndexOverride !== null ? batterIndexOverride : state.currentBatterIndex) % lineup.length;
     lineup.forEach((memberId, idx) => {
       const member = currentMembers.find(m => m.id === memberId);
       if (!member) return;
       const isCurrent = idx === currentIdx;
+      const stats = getBatterTodayStats(memberId, currentEvents);
+      const statsText = stats.ab > 0 ? `${stats.ab}打数${stats.h}安打` : '未打席';
       content.appendChild(el('button', {
         className: 'list-item',
         style: isCurrent ? { background: 'var(--color-primary-dim)', borderRadius: 'var(--radius-md)' } : {},
-        onClick: () => { currentState.currentBatterIndex = idx; renderInputPanel(currentState); close(); },
+        onClick: () => { batterIndexOverride = idx; renderInputPanel(currentState); close(); },
       }, [
         el('div', { className: 'player-avatar player-avatar-sm', textContent: member.number || String(idx + 1) }),
         el('div', { className: 'list-item-content' }, [
           el('div', { className: 'list-item-title', textContent: `${idx + 1}番 ${member.name}` }),
+          el('div', { className: 'list-item-subtitle', textContent: statsText }),
         ]),
         isCurrent ? el('span', { className: 'badge badge-primary', textContent: '次の打者' }) : el('span'),
       ]));
@@ -996,7 +1009,7 @@ function showPlayInputModal(state, afterEvent) {
           actionToSave = 'advanceTwo';
         }
         if (['wildPitch', 'passedBall', 'balk'].includes(selectedAction) && advanceSteps === 2) {
-          noteToSave = `${noteToSave} [ADVANCE_TWO]`.trim();
+          noteToSave = `${noteToSave} ${NOTE_FLAG_ADVANCE_TWO}`.trim();
         }
         let order;
         if (afterEvent) {
@@ -1023,23 +1036,15 @@ function showPlayInputModal(state, afterEvent) {
 }
 
 /** 打席の直後にプレーを挿入するモーダル */
-function showInsertPlayModal(afterEvent) {
-  // afterEventの時点のstateを計算
-  showPlayInputModal(currentState, afterEvent);
+async function showInsertPlayModal(afterEvent) {
+  const opponentScores = await DB.getOpponentScores(currentGameId);
+  const stateAtInsertion = computeGameState(currentEvents, currentGame, currentMembers, opponentScores, afterEvent.order);
+  showPlayInputModal(stateAtInsertion, afterEvent);
 }
 
-/** イベントのorder値を整数に再番号付け */
+/** イベントのorder値を整数に再番号付け（トランザクション） */
 async function reorderEvents() {
-  const events = await DB.getAllEvents(currentGameId);
-  events.sort((a, b) => a.order - b.order);
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i];
-    const newOrder = i + 1;
-    if (ev.order !== newOrder) {
-      if (ev.type === 'atBat') await DB.updateAtBat(ev.id, { order: newOrder });
-      else if (ev.type === 'play') await DB.updatePlay(ev.id, { order: newOrder });
-    }
-  }
+  await DB.reorderAllEvents(currentGameId);
 }
 
 async function createInningChangeMarker(nextInning, nextSide) {
@@ -1054,7 +1059,7 @@ async function createInningChangeMarker(nextInning, nextSide) {
     runnerId: null,
     resultStatus: 'success',
     outPosition: null,
-    note: '[SYS]INNING_CHANGE',
+    note: NOTE_SYS_INNING_CHANGE,
     order,
   });
 }
@@ -1176,8 +1181,8 @@ function showAtBatEditModal(event) {
       el('button', { className: 'btn btn-primary', style: { flex: 1 }, textContent: '保存',
         onClick: async () => {
           const nextFlags = { ...(event.specialFlags || {}), droppedThirdStrikeSuccess };
-          const cleanedNote = (note || '').replace('[DROPPED_THIRD_STRIKE_SUCCESS]', '').trim();
-          const noteWithFlag = droppedThirdStrikeSuccess ? `${cleanedNote} [DROPPED_THIRD_STRIKE_SUCCESS]`.trim() : cleanedNote;
+          const cleanedNote = (note || '').replace(NOTE_FLAG_DROPPED_THIRD_STRIKE, '').trim();
+          const noteWithFlag = droppedThirdStrikeSuccess ? `${cleanedNote} ${NOTE_FLAG_DROPPED_THIRD_STRIKE}`.trim() : cleanedNote;
           const fieldDirection = (isBattedOutResult(result) || isHitResult(result) || result === 'doublePlay') ? {
             battedType: battedType || null,
             battedTypeLabel: battedType || null,
@@ -1251,6 +1256,7 @@ function showGameMenu() {
       { icon: '🧭', label: '特殊開始設定', desc: '1アウト1,2塁などを設定', fn: () => { close(); showSpecialStartModal(); } },
       { icon: '⚾', label: '投手成績', desc: '被得点・三振・自責点', fn: () => { close(); showPitcherStatsModal(); } },
       { icon: '🏁', label: '試合終了', desc: 'この試合を終了する', fn: () => { close(); showFinishGameModal(); } },
+      { icon: '💾', label: 'データをエクスポート', desc: '全データをJSONで保存', fn: () => { close(); exportData(); } },
       { icon: '🏠', label: 'ホームに戻る', desc: '試合は保存されます', fn: () => { close(); window.__navigate('home'); } },
     ];
     for (const it of items) {
@@ -1464,10 +1470,6 @@ function formatFieldingPosition(positionId) {
   const found = POSITIONS.find((p) => p.id === positionId);
   if (!found) return positionId || '';
   return `${found.label} (${found.short})`;
-}
-
-function isAtBatCounted(result) {
-  return !['walk', 'hitByPitch', 'sacrifice', 'sacrificeFly'].includes(result);
 }
 
 function downloadGameShareImage(filename, title, statusLine, headers, rows, state, pitcherHeaders = [], pitcherRows = []) {
@@ -2083,6 +2085,91 @@ function formatOutsToInningsLabel(outs) {
   if (rem === 0) return `${whole}`;
   if (rem === 1) return `${whole} 1/3`;
   return `${whole} 2/3`;
+}
+
+// ════════════ GAME HELPERS ════════════
+
+/** 打者の今日の成績を集計（打数・安打） */
+function getBatterTodayStats(batterId, events) {
+  let ab = 0, h = 0;
+  for (const e of events) {
+    if (e.type !== 'atBat' || e.batterId !== batterId) continue;
+    if (isAtBatCounted(e.result)) ab++;
+    if (isHitResult(e.result)) h++;
+  }
+  return { ab, h };
+}
+
+/** 打数にカウントされる結果か */
+function isAtBatCounted(result) {
+  return !['walk', 'hitByPitch', 'sacrifice', 'sacrificeFly'].includes(result);
+}
+
+/** 取消対象となる最後のユーザーイベントを取得（システムイベントを考慮） */
+function getLastUserEvent(events) {
+  if (!events || events.length === 0) return null;
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (!isSystemEvent(e)) return e;
+  }
+  return null;
+}
+
+/** 最後のイベントの取消ラベルを生成 */
+function getUndoLabel(event) {
+  if (!event) return '';
+  if (event.type === 'atBat') {
+    const member = currentMembers.find(m => m.id === event.batterId);
+    return `${member?.name || '不明'} ${getResultLabel(event.result)}`;
+  }
+  const action = PLAY_ACTIONS.find(a => a.id === event.action);
+  return action?.label || event.action;
+}
+
+/** 取消モーダル */
+function showUndoModal(lastEvent) {
+  const label = getUndoLabel(lastEvent);
+  showConfirmModal(`「${label}」を取り消しますか？`, async () => {
+    if (lastEvent.type === 'atBat') {
+      const relatedPlays = currentEvents.filter(e => e.type === 'play' && e.relatedAtBatId === lastEvent.id);
+      for (const p of relatedPlays) await DB.deletePlay(p.id);
+      await DB.deleteAtBat(lastEvent.id);
+    } else {
+      await DB.deletePlay(lastEvent.id);
+    }
+    batterIndexOverride = null;
+    showToast('取り消しました');
+    await refreshAll();
+  }, '取り消す');
+}
+
+/** 記録ボタンの有効/無効を切り替え */
+function setResultButtonsDisabled(disabled) {
+  const panel = document.getElementById('input-panel');
+  if (!panel) return;
+  panel.querySelectorAll('.btn-result, .play-add-btn').forEach(btn => {
+    btn.disabled = disabled;
+    btn.style.opacity = disabled ? '0.5' : '';
+  });
+}
+
+/** データエクスポート */
+async function exportData() {
+  try {
+    const data = await DB.exportAllData();
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `scorebook_backup_${dateStr}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('エクスポートしました', 'success');
+  } catch (e) {
+    showToast('エクスポートに失敗しました', 'error');
+  }
 }
 
 export { refreshAll };

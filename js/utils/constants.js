@@ -128,3 +128,7 @@ export function isBattedOutResult(result) {
 }
 
 export const DEFAULT_INNINGS = 7;
+
+export const NOTE_SYS_INNING_CHANGE = '[SYS]INNING_CHANGE';
+export const NOTE_FLAG_ADVANCE_TWO = '[ADVANCE_TWO]';
+export const NOTE_FLAG_DROPPED_THIRD_STRIKE = '[DROPPED_THIRD_STRIKE_SUCCESS]';

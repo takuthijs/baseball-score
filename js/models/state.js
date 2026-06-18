@@ -2,7 +2,7 @@
  * 状態再計算エンジン
  * 全イベントログから試合状態を計算する（最重要コンポーネント）
  */
-import { isHitResult, isOutResult, isOnBaseResult } from '../utils/constants.js';
+import { isHitResult, isOutResult, isOnBaseResult, NOTE_FLAG_DROPPED_THIRD_STRIKE } from '../utils/constants.js';
 
 /**
  * 試合状態を全イベントから再計算
@@ -460,7 +460,7 @@ function addInningScore(inningScores, inning, runs) {
 function isDroppedThirdStrikeSuccess(atBatEvent) {
   if (!atBatEvent || atBatEvent.result !== 'strikeout') return false;
   if (atBatEvent?.specialFlags?.droppedThirdStrikeSuccess === true) return true;
-  return typeof atBatEvent.note === 'string' && atBatEvent.note.includes('[DROPPED_THIRD_STRIKE_SUCCESS]');
+  return typeof atBatEvent.note === 'string' && atBatEvent.note.includes(NOTE_FLAG_DROPPED_THIRD_STRIKE);
 }
 
 /**

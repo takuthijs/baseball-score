@@ -72,6 +72,33 @@ export function showToast(message, type = 'success', duration = 2500) {
   }, duration);
 }
 
+/** モーダルを表示する共通ユーティリティ */
+export function createModal(title, contentFn) {
+  const overlay = el('div', { className: 'modal-overlay active' });
+  const content = el('div', { className: 'modal-content' }, [
+    el('div', { className: 'modal-handle' }),
+    el('div', { className: 'modal-header' }, [
+      el('h2', { className: 'modal-title', textContent: title }),
+      el('button', { className: 'modal-close', textContent: '✕', onClick: () => overlay.remove() }),
+    ]),
+  ]);
+  contentFn(content, () => overlay.remove());
+  overlay.appendChild(content);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
+export function showConfirmModal(message, onConfirm, confirmText = '削除する') {
+  createModal('確認', (content, close) => {
+    content.appendChild(el('div', { style: { textAlign: 'center', marginBottom: 'var(--space-xl)', fontSize: 'var(--font-size-md)' }, textContent: message }));
+    content.appendChild(el('div', { style: { display: 'flex', gap: 'var(--space-md)' } }, [
+      el('button', { className: 'btn btn-secondary', style: { flex: 1 }, textContent: 'キャンセル', onClick: () => close() }),
+      el('button', { className: 'btn btn-danger', style: { flex: 1 }, textContent: confirmText, onClick: () => { close(); onConfirm(); } }),
+    ]));
+  });
+}
+
 /** debounce */
 export function debounce(fn, delay = 300) {
   let timer;

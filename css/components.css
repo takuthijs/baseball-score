@@ -133,6 +133,12 @@
   opacity: 0.2;
 }
 
+.btn-result:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+  transform: none;
+}
+
 .btn-result.hit {
   background: var(--color-hit-dim);
   color: var(--color-hit);

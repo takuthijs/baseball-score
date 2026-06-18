@@ -620,6 +620,17 @@
   color: var(--color-accent);
 }
 
+.undo-btn {
+  color: var(--color-text-muted);
+  border-color: var(--color-border);
+}
+
+.undo-btn:active {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-border-strong);
+  color: var(--color-text);
+}
+
 /* ────────────────────────────────────────
    HISTORY PAGE
    ──────────────────────────────────────── */

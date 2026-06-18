@@ -233,3 +233,54 @@ export async function getNextPitcherAppearanceOrder(gameId) {
   if (all.length === 0) return 1;
   return Math.max(...all.map((s) => Number(s.appearanceOrder) || 0)) + 1;
 }
+
+// ── Active Games ──
+export async function getActiveGames() {
+  return db.games.where('status').equals('active').reverse().sortBy('createdAt');
+}
+
+// ── Event Reorder (transactional) ──
+export async function reorderAllEvents(gameId) {
+  const events = await getAllEvents(gameId);
+  events.sort((a, b) => a.order - b.order);
+  await db.transaction('rw', [db.atBats, db.plays], async () => {
+    for (let i = 0; i < events.length; i++) {
+      const newOrder = i + 1;
+      if (events[i].order !== newOrder) {
+        if (events[i].type === 'atBat') await db.atBats.update(events[i].id, { order: newOrder });
+        else await db.plays.update(events[i].id, { order: newOrder });
+      }
+    }
+  });
+}
+
+// ── Export / Import ──
+export async function exportAllData() {
+  const [teams, members, games, atBats, plays, pitcherStats, opponentScores] = await Promise.all([
+    db.teams.toArray(),
+    db.members.toArray(),
+    db.games.toArray(),
+    db.atBats.toArray(),
+    db.plays.toArray(),
+    db.pitcherStats.toArray(),
+    db.opponentScores.toArray(),
+  ]);
+  return { version: 2, exportedAt: Date.now(), teams, members, games, atBats, plays, pitcherStats, opponentScores };
+}
+
+export async function importAllData(data) {
+  if (!data || data.version !== 2) throw new Error('サポートされていないデータ形式です（バージョン2のみ対応）');
+  await db.transaction('rw', [db.teams, db.members, db.games, db.atBats, db.plays, db.pitcherStats, db.opponentScores], async () => {
+    await Promise.all([
+      db.teams.clear(), db.members.clear(), db.games.clear(),
+      db.atBats.clear(), db.plays.clear(), db.pitcherStats.clear(), db.opponentScores.clear(),
+    ]);
+    if (data.teams?.length) await db.teams.bulkAdd(data.teams);
+    if (data.members?.length) await db.members.bulkAdd(data.members);
+    if (data.games?.length) await db.games.bulkAdd(data.games);
+    if (data.atBats?.length) await db.atBats.bulkAdd(data.atBats);
+    if (data.plays?.length) await db.plays.bulkAdd(data.plays);
+    if (data.pitcherStats?.length) await db.pitcherStats.bulkAdd(data.pitcherStats);
+    if (data.opponentScores?.length) await db.opponentScores.bulkAdd(data.opponentScores);
+  });
+}
