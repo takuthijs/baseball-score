@@ -3,12 +3,13 @@
  */
 import { el, showToast, formatInning, escapeHtml, createModal, showConfirmModal } from '../utils/helpers.js';
 import {
-  AT_BAT_RESULTS, PLAY_ACTIONS, BASES, POSITIONS,
-  BATTED_BALL_POSITIONS, BATTED_BALL_ZONES,
-  getResultLabel, getResultShort, getResultClass, isOutResult, isOnBaseResult, isBattedOutResult, isHitResult,
+  AT_BAT_RESULTS, PLAY_ACTIONS, BASES, POSITIONS, ERROR_REACHED_BASES,
+  getResultLabel, getResultShort, getResultClass, isOutResult, isOnBaseResult, isBattedOutResult, isHitResult, needsFieldDirection,
+  getErrorReachedBaseLabel,
   NOTE_SYS_INNING_CHANGE, NOTE_FLAG_ADVANCE_TWO, NOTE_FLAG_DROPPED_THIRD_STRIKE,
 } from '../utils/constants.js';
 import { computeGameState, detectInningChanges } from '../models/state.js';
+import { createFieldDiagram, buildFieldDirection } from '../utils/fieldDiagram.js';
 import * as DB from '../db.js';
 
 let currentGameId = null;
@@ -20,6 +21,7 @@ let currentEvents = [];
 let recordMode = 'detailed';
 let batterIndexOverride = null;
 let isRecording = false;
+let pitcherPromptShownFor = null;
 
 function getTeamAttackSide() {
   return currentGame?.isHome ? 'bottom' : 'top';
@@ -67,6 +69,24 @@ async function refreshAll() {
   renderStatusBar(currentState);
   renderEventLog(events, currentState);
   renderInputPanel(currentState);
+  await promptPitcherStatsIfNeeded(currentState);
+}
+
+function isDefensiveHalf(state) {
+  return state.side === getOpponentAttackSide();
+}
+
+async function promptPitcherStatsIfNeeded(state) {
+  if (!currentGame?.isHome || currentGame.status === 'finished') return;
+  if (state.halfInningEnded || !isDefensiveHalf(state)) return;
+  const key = `${state.inning}-${state.side}`;
+  if (pitcherPromptShownFor === key) return;
+  pitcherPromptShownFor = key;
+  showPitcherStatsModal({ inning: state.inning, side: state.side });
+}
+
+function formatPitcherSummary(inning, side, pitcherName, stats) {
+  return `${formatInning(inning, side)} ${pitcherName || '投手未選択'} 失点:${stats.runsAllowed ?? 0} 自責:${stats.earnedRuns ?? 0} 投球回:${formatInningsPitchedLabel(stats.inningsPitched ?? '1.0')}`;
 }
 
 // ════════════ STATUS BAR ════════════
@@ -180,12 +200,21 @@ function createAtBatLogItem(event, allEvents, eventIndex) {
   let detailText = '';
   if (event.rbiProduced > 0) detailText += `${event.rbiProduced}打点 `;
   if (event?.specialFlags?.droppedThirdStrikeSuccess) detailText += '振り逃げ成功 ';
-  if (event.fieldDirection?.position || event.fieldDirection?.zone) {
-    const battedType = event.fieldDirection.battedTypeLabel || event.fieldDirection.battedType || '';
-    const pos = event.fieldDirection.positionLabel || event.fieldDirection.position || '';
-    const zone = event.fieldDirection.zoneLabel || event.fieldDirection.zone || '';
-    const location = [battedType, pos, zone].filter(Boolean).join(' ');
-    if (location) detailText += `(${location}) `;
+  if (event.fieldDirection?.position || event.fieldDirection?.zone || (event.result === 'error' && event.specialFlags?.errorReachedBase)) {
+    const parts = [];
+    if (event.fieldDirection?.position || event.fieldDirection?.zone) {
+      if (event.fieldDirection.zone === 'homerun') {
+        const pos = event.fieldDirection.positionLabel || '';
+        parts.push(pos ? `HR・${pos}` : 'HR');
+      } else {
+        const pos = event.fieldDirection.positionLabel || event.fieldDirection.position || '';
+        if (pos) parts.push(pos);
+      }
+    }
+    if (event.result === 'error' && event.specialFlags?.errorReachedBase) {
+      parts.push(getErrorReachedBaseLabel(event.specialFlags.errorReachedBase));
+    }
+    if (parts.length) detailText += `(${parts.join('・')}) `;
   }
   if (event.note) detailText += event.note.replace(NOTE_FLAG_DROPPED_THIRD_STRIKE, '').trim();
 
@@ -346,8 +375,6 @@ function renderInputPanel(state) {
   ]);
   panel.appendChild(batterRow);
 
-  panel.appendChild(el('div', { style: { fontSize: 'var(--font-size-xs)', color: 'var(--color-primary)', marginBottom: 'var(--space-xs)', textAlign: 'center' }, textContent: '詳細モード: 自動計算後に＋プレーでランナー修正できます' }));
-
   const mainResults = [
     { id: 'single', short: '安打', cls: 'hit' },
     { id: 'double', short: '二塁打', cls: 'hit' },
@@ -357,8 +384,9 @@ function renderInputPanel(state) {
     { id: 'groundout', short: 'ゴロ', cls: 'out' },
     { id: 'flyout', short: 'フライ', cls: 'out' },
     { id: 'walk', short: '四球', cls: 'walk' },
+    { id: 'error', short: '失策', cls: 'error-btn' },
   ];
-  const resultGrid = el('div', { className: 'result-buttons' });
+  const resultGrid = el('div', { className: 'result-buttons result-buttons--3col' });
   for (const r of mainResults) {
     resultGrid.appendChild(el('button', { className: `btn-result ${r.cls}`, textContent: r.short, onClick: () => recordAtBat(r.id, currentBatterId, state) }));
   }
@@ -386,7 +414,7 @@ async function recordAtBat(result, batterId, state) {
   isRecording = true;
   setResultButtonsDisabled(true);
   const nextOrder = await DB.getNextOrder(currentGameId);
-  const rbi = calculateAutoRBI(result, state.runners);
+  const rbi = result === 'error' ? 0 : calculateAutoRBI(result, state.runners);
   const atBat = {
     gameId: currentGameId, inning: state.inning, side: state.side,
     atBatNumber: state.atBatCount + 1, batterId, pitcherId: null,
@@ -401,7 +429,7 @@ async function recordAtBat(result, batterId, state) {
     return;
   }
 
-  if (isBattedOutResult(result) || isHitResult(result) || result === 'doublePlay') {
+  if (needsFieldDirection(result)) {
     isRecording = false;
     setResultButtonsDisabled(false);
     showBattedBallLocationModal(atBat, state);
@@ -478,52 +506,15 @@ function showStrikeoutOptionsModal(atBat, state) {
 
 function showBattedBallLocationModal(atBat, state) {
   createModal('打球位置入力', (content, close) => {
-    let selectedBattedType = atBat.fieldDirection?.battedType || '';
-    let selectedPosition = atBat.fieldDirection?.position || '';
-    let selectedZone = atBat.fieldDirection?.zone || '';
-    content.appendChild(el('div', { className: 'input-label', style: { marginBottom: 'var(--space-sm)' }, textContent: '打球種別' }));
-    const typeGroup = el('div', { className: 'btn-group', style: { marginBottom: 'var(--space-base)' } });
-    const typeOptions = ['ゴロ', 'フライ', 'ライナー'];
-    for (const type of typeOptions) {
-      const btn = el('button', {
-        className: `chip ${selectedBattedType === type ? 'active' : ''}`,
-        textContent: type,
-        onClick: () => {
-          selectedBattedType = type;
-          typeGroup.querySelectorAll('.chip').forEach((c) => c.classList.remove('active'));
-          btn.classList.add('active');
-        },
-      });
-      typeGroup.appendChild(btn);
-    }
-    content.appendChild(typeGroup);
-    content.appendChild(el('div', { className: 'input-label', style: { marginBottom: 'var(--space-sm)' }, textContent: '守備位置' }));
-    const positionWrap = el('div', { className: 'result-buttons', style: { gridTemplateColumns: 'repeat(3, 1fr)', marginBottom: 'var(--space-base)' } });
-    for (const pos of BATTED_BALL_POSITIONS) {
-      const btn = el('button', {
-        className: 'btn-result special',
-        textContent: pos.label,
-        style: selectedPosition === pos.id ? { borderColor: 'var(--color-primary)', boxShadow: '0 0 0 2px var(--color-primary-dim)' } : {},
-        onClick: () => {
-          selectedPosition = pos.id;
-          positionWrap.querySelectorAll('.btn-result').forEach((b) => { b.style.borderColor = ''; b.style.boxShadow = ''; });
-          btn.style.borderColor = 'var(--color-primary)';
-          btn.style.boxShadow = '0 0 0 2px var(--color-primary-dim)';
-        },
-      });
-      positionWrap.appendChild(btn);
-    }
-    content.appendChild(positionWrap);
-    content.appendChild(el('div', { className: 'input-label', style: { marginBottom: 'var(--space-sm)' }, textContent: '方向詳細' }));
-    const zoneSelect = el('select', { className: 'input-field', style: { marginBottom: 'var(--space-xl)' }, onChange: (e) => { selectedZone = e.target.value; } }, [
-      el('option', { value: '', textContent: '選択してください' }),
-    ]);
-    for (const z of BATTED_BALL_ZONES) {
-      zoneSelect.appendChild(el('option', { value: z.id, textContent: z.label }));
-    }
-    zoneSelect.value = selectedZone || '';
-    content.appendChild(zoneSelect);
-    content.appendChild(el('div', { style: { display: 'flex', gap: 'var(--space-md)' } }, [
+    const diagram = createFieldDiagram({
+      pinX: atBat.fieldDirection?.pinX ?? null,
+      pinY: atBat.fieldDirection?.pinY ?? null,
+    });
+
+    content.appendChild(el('div', { className: 'input-label', style: { marginBottom: 'var(--space-sm)' }, textContent: '打球位置（タップでピンを置く）' }));
+    content.appendChild(diagram.wrap);
+
+    content.appendChild(el('div', { style: { display: 'flex', gap: 'var(--space-md)', marginTop: 'var(--space-base)' } }, [
       el('button', {
         className: 'btn btn-secondary',
         style: { flex: 1 },
@@ -535,19 +526,62 @@ function showBattedBallLocationModal(atBat, state) {
         style: { flex: 1 },
         textContent: '記録する',
         onClick: async () => {
-          atBat.fieldDirection = {
-            battedType: selectedBattedType || null,
-            battedTypeLabel: selectedBattedType || null,
-            position: selectedPosition || null,
-            positionLabel: BATTED_BALL_POSITIONS.find((p) => p.id === selectedPosition)?.label || null,
-            zone: selectedZone || null,
-            zoneLabel: BATTED_BALL_ZONES.find((z) => z.id === selectedZone)?.label || null,
-          };
+          atBat.fieldDirection = buildFieldDirection(diagram.getResolved());
           close();
+          if (atBat.result === 'error') {
+            showErrorReachedBaseModal(atBat, state);
+            return;
+          }
           await finalizeAtBatRecord(atBat, state);
         },
       }),
     ]));
+  });
+}
+
+function showErrorReachedBaseModal(atBat, state) {
+  createModal('失策の進塁先', (content, close) => {
+    let selected = atBat.specialFlags?.errorReachedBase || '1B';
+    content.appendChild(el('div', {
+      className: 'text-secondary',
+      style: { marginBottom: 'var(--space-base)', fontSize: 'var(--font-size-sm)', textAlign: 'center' },
+      textContent: '打者は何塁まで進みましたか？',
+    }));
+    const grid = el('div', { className: 'result-buttons result-buttons--2col' });
+    for (const base of ERROR_REACHED_BASES) {
+      const btn = el('button', {
+        className: `btn-result error-btn ${selected === base.id ? 'active' : ''}`,
+        textContent: base.label,
+        onClick: () => {
+          selected = base.id;
+          grid.querySelectorAll('.btn-result').forEach((b) => {
+            b.classList.remove('active');
+            b.style.borderColor = '';
+            b.style.boxShadow = '';
+          });
+          btn.classList.add('active');
+          btn.style.borderColor = 'var(--color-primary)';
+          btn.style.boxShadow = '0 0 0 2px var(--color-primary-dim)';
+        },
+      });
+      if (selected === base.id) {
+        btn.style.borderColor = 'var(--color-primary)';
+        btn.style.boxShadow = '0 0 0 2px var(--color-primary-dim)';
+      }
+      grid.appendChild(btn);
+    }
+    content.appendChild(grid);
+    content.appendChild(el('button', {
+      className: 'btn btn-primary btn-block btn-lg',
+      style: { marginTop: 'var(--space-base)' },
+      textContent: '次へ',
+      onClick: async () => {
+        atBat.specialFlags = { ...(atBat.specialFlags || {}), errorReachedBase: selected };
+        atBat.rbiProduced = 0;
+        close();
+        await finalizeAtBatRecord(atBat, state);
+      },
+    }));
   });
 }
 
@@ -572,7 +606,7 @@ function shouldPromptRunnerOutcome(atBat, state) {
   const hasRunner = !!(state?.runners?.first || state?.runners?.second || state?.runners?.third);
   if (!hasRunner) return false;
   if (atBat?.specialFlags?.droppedThirdStrikeSuccess) return true;
-  return isOutResult(atBat.result) || (atBat.rbiProduced || 0) > 0;
+  return isOutResult(atBat.result) || atBat.result === 'error' || (atBat.rbiProduced || 0) > 0;
 }
 
 function showRunnerOutcomeModal(atBat, state, toastMessage) {
@@ -587,10 +621,13 @@ function showRunnerOutcomeModal(atBat, state, toastMessage) {
   }
 
   createModal('打席内ランナー結果', (content, close) => {
+    const intro = atBat.result === 'error'
+      ? '失策のため打点はつきません。各ランナーの進塁・生還・アウトを記録してください'
+      : 'この打席で各ランナーがどうなったかを記録してください';
     content.appendChild(el('div', {
       className: 'text-secondary',
       style: { marginBottom: 'var(--space-base)', fontSize: 'var(--font-size-sm)' },
-      textContent: 'この打席で各ランナーがどうなったかを記録してください',
+      textContent: intro,
     }));
 
     for (const row of runnerMap) {
@@ -695,163 +732,41 @@ async function postAtBatCheck() {
   }
 }
 
-/** 3アウト時のモーダル: 投手入力 + イニング遷移確認 */
+/** 3アウト後の次の半イニング */
+function getNextHalfInning(state) {
+  if (state.side === 'top') {
+    return { inning: state.inning, side: 'bottom' };
+  }
+  return { inning: state.inning + 1, side: 'top' };
+}
+
+/** 3アウト時のモーダル: イニング遷移確認 */
 function showThreeOutModal(state) {
-  const nextInning = state.inning + 1;
-  const nextSide = getTeamAttackSide();
-  const nextLabel = formatInning(nextInning, nextSide);
-  const pitcherTargetInning = state.inning;
-  const pitcherTargetSide = getOpponentAttackSide();
-  const pitcherTargetLabel = formatInning(pitcherTargetInning, pitcherTargetSide);
+  const next = getNextHalfInning(state);
+  const nextLabel = formatInning(next.inning, next.side);
+  const teamDefendsNext = next.side === getOpponentAttackSide();
 
   createModal('3アウト チェンジ', (content, close) => {
-    content.appendChild(el('div', { style: { textAlign: 'center', marginBottom: 'var(--space-lg)' } }, [
+    content.appendChild(el('div', { style: { textAlign: 'center', marginBottom: 'var(--space-xl)' } }, [
       el('div', { style: { fontSize: '2rem', marginBottom: 'var(--space-sm)' }, textContent: '⚾' }),
       el('div', { style: { fontSize: 'var(--font-size-md)', fontWeight: 'bold' }, textContent: `${formatInning(state.inning, state.side)} 終了` }),
       el('div', { className: 'text-secondary', style: { marginTop: 'var(--space-xs)' }, textContent: `次は ${nextLabel} です` }),
     ]));
 
-    // 投手成績入力セクション
-    content.appendChild(el('div', { style: { marginBottom: 'var(--space-lg)' } }, [
-      el('div', { className: 'input-label', style: { marginBottom: 'var(--space-xs)', fontWeight: 'bold' }, textContent: '📊 投手成績（任意）' }),
-      el('div', { className: 'text-secondary', style: { fontSize: 'var(--font-size-sm)' }, textContent: `${pitcherTargetLabel}（相手攻撃）` }),
-    ]));
-
-    let selectedPitcherId = null;
-    let inningsPitched = '1.0';
-    let pitches = 0;
-    let runsAllowed = 0;
-    let earnedRuns = 0;
-    let hitsAllowed = 0;
-    let homeRunsAllowed = 0;
-    let strikeouts = 0;
-    let walks = 0;
-    let hitByPitch = 0;
-    let balks = 0;
-    let wildPitches = 0;
-    const lineupMembers = (currentGame.lineup || []).map((id) => currentMembers.find((m) => m.id === id)).filter(Boolean);
-    const pitcherSelect = el('select', {
-      className: 'input-field',
-      style: { marginBottom: 'var(--space-base)' },
-      onChange: (e) => { selectedPitcherId = e.target.value ? Number(e.target.value) : null; },
-    }, [el('option', { value: '', textContent: '投手を選択' })]);
-    for (const m of lineupMembers) pitcherSelect.appendChild(el('option', { value: String(m.id), textContent: m.name }));
-    content.appendChild(el('div', { className: 'input-group', style: { marginBottom: 'var(--space-base)' } }, [
-      el('label', { className: 'input-label', textContent: '投手名' }),
-      pitcherSelect,
-    ]));
-    content.appendChild(el('div', { className: 'pitcher-stat-row' }, [
-      el('span', { className: 'pitcher-stat-label', textContent: '投球回' }),
-      createInningsPitchedSelect(inningsPitched, (v) => { inningsPitched = v; }),
-    ]));
-    content.appendChild(el('div', { className: 'pitcher-stat-row' }, [
-      el('span', { className: 'pitcher-stat-label', textContent: '投球数' }),
-      el('input', { className: 'pitcher-stat-input', type: 'number', min: '0', value: String(pitches), onInput: (e) => { pitches = parseInt(e.target.value, 10) || 0; } }),
-    ]));
-    const statRows = [
-      { label: '失点', value: 0, onInput: (v) => { runsAllowed = v; } },
-      { label: '自責点', value: 0, onInput: (v) => { earnedRuns = v; } },
-      { label: '被安打', value: 0, onInput: (v) => { hitsAllowed = v; } },
-      { label: '被本塁打', value: 0, onInput: (v) => { homeRunsAllowed = v; } },
-      { label: '奪三振', value: 0, onInput: (v) => { strikeouts = v; } },
-      { label: '与四球', value: 0, onInput: (v) => { walks = v; } },
-      { label: '与死球', value: 0, onInput: (v) => { hitByPitch = v; } },
-      { label: 'ボーク', value: 0, onInput: (v) => { balks = v; } },
-      { label: '暴投', value: 0, onInput: (v) => { wildPitches = v; } },
-    ];
-    for (const r of statRows) {
-      content.appendChild(el('div', { className: 'pitcher-stat-row' }, [
-        el('span', { className: 'pitcher-stat-label', textContent: r.label }),
-        el('input', { className: 'pitcher-stat-input', type: 'number', min: '0', value: String(r.value), onInput: (e) => r.onInput(e.target.value) }),
-      ]));
+    if (currentGame.isHome && teamDefendsNext) {
+      content.appendChild(el('div', {
+        className: 'text-secondary',
+        style: { marginBottom: 'var(--space-lg)', fontSize: 'var(--font-size-sm)', textAlign: 'center' },
+        textContent: '次は守備イニングです。進んだあと投手成績の入力画面が開きます',
+      }));
     }
-
-    const savePitcherEntry = async () => {
-      if (!selectedPitcherId) return false;
-      const pitcher = currentMembers.find((m) => m.id === selectedPitcherId);
-      const appearanceOrder = await DB.getNextPitcherAppearanceOrder(currentGameId);
-      const pitcherSummary = `${pitcherTargetLabel} ${pitcher?.name || '投手未選択'} 失点:${runsAllowed} 自責:${earnedRuns} 投球回:${formatInningsPitchedLabel(inningsPitched)} 球数:${pitches}`;
-      await DB.addPitcherStats(
-        currentGameId,
-        {
-          pitcherId: selectedPitcherId,
-          pitcherName: pitcher?.name || '',
-          appearanceOrder,
-          inningsPitched,
-          pitches,
-          runsAllowed,
-          earnedRuns,
-          hitsAllowed,
-          homeRunsAllowed,
-          strikeouts,
-          walks,
-          hitByPitch,
-          balks,
-          wildPitches,
-          note: '',
-        },
-        pitcherTargetInning,
-        pitcherTargetSide,
-      );
-      await syncOpponentScoreFromPitcherStats(pitcherTargetInning, pitcherTargetSide);
-      await DB.addPlay({
-        gameId: currentGameId,
-        inning: pitcherTargetInning,
-        side: pitcherTargetSide,
-        relatedAtBatId: null,
-        action: 'pitcherStats',
-        runner: '',
-        runnerId: null,
-        resultStatus: 'success',
-        outPosition: null,
-        note: pitcherSummary,
-        order: await DB.getNextOrder(currentGameId),
-      });
-      return true;
-    };
-
-    const clearPitcherForm = () => {
-      selectedPitcherId = null;
-      if (pitcherSelect) pitcherSelect.value = '';
-      inningsPitched = '0.1';
-      pitches = 0;
-      runsAllowed = 0;
-      earnedRuns = 0;
-      hitsAllowed = 0;
-      homeRunsAllowed = 0;
-      strikeouts = 0;
-      walks = 0;
-      hitByPitch = 0;
-      balks = 0;
-      wildPitches = 0;
-    };
-
-    content.appendChild(el('button', {
-      className: 'btn btn-secondary btn-block',
-      style: { marginBottom: 'var(--space-sm)' },
-      textContent: '＋ 投手情報を追加',
-      onClick: async () => {
-        if (!selectedPitcherId) {
-          showToast('投手を選択してください', 'error');
-          return;
-        }
-        const saved = await savePitcherEntry();
-        if (saved) {
-          clearPitcherForm();
-          showToast('投手情報を追加しました');
-        }
-      },
-    }));
 
     content.appendChild(el('button', {
       className: 'btn btn-primary btn-block btn-lg',
       textContent: `${nextLabel} へ進む`,
       onClick: async () => {
-        if (selectedPitcherId) {
-          await savePitcherEntry();
-        }
-        const pitcher = currentMembers.find((m) => m.id === selectedPitcherId);
-        await createInningChangeMarker(nextInning, nextSide);
+        pitcherPromptShownFor = null;
+        await createInningChangeMarker(next.inning, next.side);
         close();
         showToast(`${nextLabel}に進みます`);
         await refreshAll();
@@ -950,7 +865,7 @@ function showPinchHitterModal(state, currentBatterIdx) {
 function showMoreResultsModal(batterId, state) {
   createModal('その他の結果', (content, close) => {
     const more = [
-      { id: 'hitByPitch', label: '死球', cls: 'walk' }, { id: 'error', label: 'エラー出塁', cls: 'error-btn' },
+      { id: 'hitByPitch', label: '死球', cls: 'walk' },
       { id: 'fieldersChoice', label: '野選', cls: 'out' }, { id: 'sacrifice', label: '犠打', cls: 'special' },
       { id: 'sacrificeFly', label: '犠牲フライ', cls: 'special' }, { id: 'doublePlay', label: '併殺打', cls: 'out' },
       { id: 'lineout', label: 'ライナー', cls: 'out' },
@@ -1178,9 +1093,8 @@ function showAtBatEditModal(event) {
     const member = currentMembers.find(m => m.id === event.batterId);
     let result = event.result, rbi = event.rbiProduced || 0, note = event.note || '';
     let droppedThirdStrikeSuccess = !!event?.specialFlags?.droppedThirdStrikeSuccess;
-    let battedType = event?.fieldDirection?.battedType || '';
-    let fieldPosition = event?.fieldDirection?.position || '';
-    let fieldZone = event?.fieldDirection?.zone || '';
+    let errorReachedBase = event?.specialFlags?.errorReachedBase || '1B';
+    let fieldDiagram = null;
     content.appendChild(el('div', { style: { textAlign: 'center', marginBottom: 'var(--space-lg)' } }, [
       el('div', { style: { fontSize: 'var(--font-size-md)', fontWeight: 'bold' }, textContent: member?.name || '不明' }),
       el('div', { className: 'text-muted', textContent: formatInning(event.inning, event.side) }),
@@ -1196,10 +1110,12 @@ function showAtBatEditModal(event) {
       rg.appendChild(btn);
     }
     content.appendChild(rg);
-    content.appendChild(el('div', { className: 'input-group', style: { marginBottom: 'var(--space-base)' } }, [
-      el('label', { className: 'input-label', textContent: '打点' }),
-      el('input', { className: 'input-field', type: 'number', min: '0', value: String(rbi), onInput: (e) => { rbi = parseInt(e.target.value) || 0; } }),
-    ]));
+    if (result !== 'error') {
+      content.appendChild(el('div', { className: 'input-group', style: { marginBottom: 'var(--space-base)' } }, [
+        el('label', { className: 'input-label', textContent: '打点' }),
+        el('input', { className: 'input-field', type: 'number', min: '0', value: String(rbi), onInput: (e) => { rbi = parseInt(e.target.value) || 0; } }),
+      ]));
+    }
     content.appendChild(el('div', { className: 'input-group', style: { marginBottom: 'var(--space-xl)' } }, [
       el('label', { className: 'input-label', textContent: '備考' }),
       el('input', { className: 'input-field', type: 'text', value: note, placeholder: '特記事項', onInput: (e) => { note = e.target.value; } }),
@@ -1217,30 +1133,38 @@ function showAtBatEditModal(event) {
         ]),
       ]));
     }
-    if (isBattedOutResult(result) || isHitResult(result) || result === 'doublePlay') {
-      content.appendChild(el('div', { className: 'input-label', style: { marginBottom: 'var(--space-sm)' }, textContent: '打球種別' }));
-      const typeSelect = el('select', { className: 'input-field', style: { marginBottom: 'var(--space-sm)' }, onChange: (e) => { battedType = e.target.value; } }, [
-        el('option', { value: '', textContent: '未選択' }),
-        el('option', { value: 'ゴロ', textContent: 'ゴロ' }),
-        el('option', { value: 'フライ', textContent: 'フライ' }),
-        el('option', { value: 'ライナー', textContent: 'ライナー' }),
-      ]);
-      typeSelect.value = battedType || '';
-      content.appendChild(typeSelect);
-      content.appendChild(el('div', { className: 'input-label', style: { marginBottom: 'var(--space-sm)' }, textContent: '打球位置（守備位置）' }));
-      const posSelect = el('select', { className: 'input-field', style: { marginBottom: 'var(--space-sm)' }, onChange: (e) => { fieldPosition = e.target.value; } }, [
-        el('option', { value: '', textContent: '未選択' }),
-      ]);
-      for (const p of BATTED_BALL_POSITIONS) posSelect.appendChild(el('option', { value: p.id, textContent: p.label }));
-      posSelect.value = fieldPosition || '';
-      content.appendChild(posSelect);
-      content.appendChild(el('div', { className: 'input-label', style: { marginBottom: 'var(--space-sm)' }, textContent: '打球位置（方向詳細）' }));
-      const zoneSelect = el('select', { className: 'input-field', style: { marginBottom: 'var(--space-xl)' }, onChange: (e) => { fieldZone = e.target.value; } }, [
-        el('option', { value: '', textContent: '未選択' }),
-      ]);
-      for (const z of BATTED_BALL_ZONES) zoneSelect.appendChild(el('option', { value: z.id, textContent: z.label }));
-      zoneSelect.value = fieldZone || '';
-      content.appendChild(zoneSelect);
+    if (result === 'error') {
+      content.appendChild(el('div', { className: 'input-label', style: { marginBottom: 'var(--space-sm)' }, textContent: '失策後の進塁先' }));
+      const baseGrid = el('div', { className: 'result-buttons result-buttons--2col', style: { marginBottom: 'var(--space-base)' } });
+      for (const base of ERROR_REACHED_BASES) {
+        const btn = el('button', {
+          className: `btn-result error-btn ${errorReachedBase === base.id ? 'active' : ''}`,
+          textContent: base.label,
+          onClick: () => {
+            errorReachedBase = base.id;
+            baseGrid.querySelectorAll('.btn-result').forEach((b) => {
+              b.style.borderColor = '';
+              b.style.boxShadow = '';
+            });
+            btn.style.borderColor = 'var(--color-primary)';
+            btn.style.boxShadow = '0 0 0 2px var(--color-primary-dim)';
+          },
+        });
+        if (errorReachedBase === base.id) {
+          btn.style.borderColor = 'var(--color-primary)';
+          btn.style.boxShadow = '0 0 0 2px var(--color-primary-dim)';
+        }
+        baseGrid.appendChild(btn);
+      }
+      content.appendChild(baseGrid);
+    }
+    if (needsFieldDirection(result)) {
+      content.appendChild(el('div', { className: 'input-label', style: { marginBottom: 'var(--space-sm)' }, textContent: '打球位置（タップでピンを置く）' }));
+      fieldDiagram = createFieldDiagram({
+        pinX: event?.fieldDirection?.pinX ?? null,
+        pinY: event?.fieldDirection?.pinY ?? null,
+      });
+      content.appendChild(fieldDiagram.wrap);
     }
     content.appendChild(el('div', { style: { display: 'flex', gap: 'var(--space-md)' } }, [
       el('button', { className: 'btn btn-danger', style: { flex: '0 0 auto' }, textContent: '削除',
@@ -1248,18 +1172,28 @@ function showAtBatEditModal(event) {
       }),
       el('button', { className: 'btn btn-primary', style: { flex: 1 }, textContent: '保存',
         onClick: async () => {
-          const nextFlags = { ...(event.specialFlags || {}), droppedThirdStrikeSuccess };
+          const nextFlags = {
+            ...(event.specialFlags || {}),
+            droppedThirdStrikeSuccess,
+          };
+          if (result === 'error') {
+            nextFlags.errorReachedBase = errorReachedBase;
+          } else {
+            delete nextFlags.errorReachedBase;
+          }
           const cleanedNote = (note || '').replace(NOTE_FLAG_DROPPED_THIRD_STRIKE, '').trim();
           const noteWithFlag = droppedThirdStrikeSuccess ? `${cleanedNote} ${NOTE_FLAG_DROPPED_THIRD_STRIKE}`.trim() : cleanedNote;
-          const fieldDirection = (isBattedOutResult(result) || isHitResult(result) || result === 'doublePlay') ? {
-            battedType: battedType || null,
-            battedTypeLabel: battedType || null,
-            position: fieldPosition || null,
-            positionLabel: BATTED_BALL_POSITIONS.find((p) => p.id === fieldPosition)?.label || null,
-            zone: fieldZone || null,
-            zoneLabel: BATTED_BALL_ZONES.find((z) => z.id === fieldZone)?.label || null,
-          } : null;
-          await DB.updateAtBat(event.id, { result, rbiProduced: rbi, note: noteWithFlag, specialFlags: nextFlags, fieldDirection });
+          let fieldDirection = null;
+          if (needsFieldDirection(result)) {
+            const resolved = fieldDiagram?.getResolved() ?? null;
+            if (resolved?.pinX != null) {
+              fieldDirection = buildFieldDirection(resolved);
+            } else {
+              const { battedType, battedTypeLabel, ...rest } = event.fieldDirection || {};
+              fieldDirection = Object.keys(rest).length ? rest : null;
+            }
+          }
+          await DB.updateAtBat(event.id, { result, rbiProduced: result === 'error' ? 0 : rbi, note: noteWithFlag, specialFlags: nextFlags, fieldDirection });
           close();
           showToast('更新しました');
           await refreshAll();
@@ -1952,9 +1886,11 @@ function showPitcherStatsModal(options = {}) {
     let inningsPitched = existingPrimary?.inningsPitched || ((options.inning === currentState?.inning && options.side === currentState?.side)
       ? formatOutsAsInnings(currentState?.outs || 0)
       : '1.0');
-    let pitches = Number(existingPrimary?.pitches) || 0;
-    let runsAllowed = Number(existingPrimary?.runsAllowed) || 0;
     let earnedRuns = Number(existingPrimary?.earnedRuns) || 0;
+    let runsAllowed = Number(existingPrimary?.runsAllowed);
+    if (Number.isNaN(runsAllowed)) {
+      runsAllowed = currentState?.inningScores?.opponent?.[targetInning] ?? 0;
+    }
     let hitsAllowed = Number(existingPrimary?.hitsAllowed) || 0;
     let homeRunsAllowed = Number(existingPrimary?.homeRunsAllowed) || 0;
     let strikeouts = Number(existingPrimary?.strikeouts) || 0;
@@ -2011,7 +1947,6 @@ function showPitcherStatsModal(options = {}) {
     content.appendChild(pitcherSelect);
     const fields = [
       { label: '投球回', type: 'selectInnings', v: inningsPitched, fn: (v) => { inningsPitched = v; } },
-      { label: '投球数', type: 'number', v: pitches, fn: (v) => { pitches = v; } },
       { label: '失点', type: 'number', v: runsAllowed, fn: (v) => { runsAllowed = v; } },
       { label: '自責点', type: 'number', v: earnedRuns, fn: (v) => { earnedRuns = v; } },
       { label: '被安打', type: 'number', v: hitsAllowed, fn: (v) => { hitsAllowed = v; } },
@@ -2038,44 +1973,33 @@ function showPitcherStatsModal(options = {}) {
         }
         const pitcher = currentMembers.find((m) => m.id === selectedPitcherId);
         const samePitcher = existingForTarget.find((s) => Number(s.pitcherId) === Number(selectedPitcherId));
+        const statPayload = {
+          pitcherName: pitcher?.name || '',
+          inningsPitched,
+          pitches: 0,
+          runsAllowed,
+          earnedRuns,
+          hitsAllowed,
+          homeRunsAllowed,
+          strikeouts,
+          walks,
+          hitByPitch,
+          balks,
+          wildPitches,
+          note: '',
+        };
         if (samePitcher) {
-          await DB.updatePitcherStat(samePitcher.id, {
-            pitcherName: pitcher?.name || '',
-            inningsPitched,
-            pitches,
-            runsAllowed,
-            earnedRuns,
-            hitsAllowed,
-            homeRunsAllowed,
-            strikeouts,
-            walks,
-            hitByPitch,
-            balks,
-            wildPitches,
-            note: '',
-          });
+          await DB.updatePitcherStat(samePitcher.id, statPayload);
         } else {
           const appearanceOrder = await DB.getNextPitcherAppearanceOrder(currentGameId);
           await DB.addPitcherStats(currentGameId, {
             pitcherId: selectedPitcherId,
-            pitcherName: pitcher?.name || '',
             appearanceOrder,
-            inningsPitched,
-            pitches,
-            runsAllowed,
-            earnedRuns,
-            hitsAllowed,
-            homeRunsAllowed,
-            strikeouts,
-            walks,
-            hitByPitch,
-            balks,
-            wildPitches,
-            note: '',
+            ...statPayload,
           }, targetInning, targetSide);
         }
         await syncOpponentScoreFromPitcherStats(targetInning, targetSide);
-        const summary = `${formatInning(targetInning, targetSide)} ${pitcher?.name || '投手未選択'} 失点:${runsAllowed} 自責:${earnedRuns} 投球回:${formatInningsPitchedLabel(inningsPitched)} 球数:${pitches}`;
+        const summary = formatPitcherSummary(targetInning, targetSide, pitcher?.name, { runsAllowed, earnedRuns, inningsPitched });
         if (options.playEventId) {
           await DB.updatePlay(options.playEventId, {
             inning: targetInning,

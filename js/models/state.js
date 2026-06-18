@@ -14,10 +14,9 @@ import { isHitResult, isOutResult, isOnBaseResult, NOTE_FLAG_DROPPED_THIRD_STRIK
  * @returns {Object} 計算された試合状態
  */
 export function computeGameState(events, game, members, opponentScores = [], upToOrder = null) {
-  const teamAttackSide = game?.isHome ? 'bottom' : 'top';
   const state = {
     inning: 1,
-    side: teamAttackSide,  // 自チームの攻撃半イニング
+    side: 'top', // 毎イニングは表（先攻側の攻撃）から開始。後攻は1回表から守備。
     outs: 0,
     runners: {
       first: null,   // { memberId, name }
@@ -53,7 +52,7 @@ export function computeGameState(events, game, members, opponentScores = [], upT
 
   // 現在のイニングと表裏を追跡
   let currentInning = 1;
-  let currentSide = teamAttackSide;
+  let currentSide = 'top';
   let outs = 0;
   let runners = { first: null, second: null, third: null };
   let teamScore = 0;
@@ -98,8 +97,7 @@ export function computeGameState(events, game, members, opponentScores = [], upT
           // 押し出し処理
           pushRunners(batterId, batter.name, runners, state, inningTeamScores, currentInning);
         } else if (event.result === 'error') {
-          // エラー出塁
-          placeBatterOnBase('single', batterId, batter.name, runners, state, inningTeamScores, currentInning);
+          placeErrorBatter(event, batterId, batter.name, runners, state, inningTeamScores, currentInning);
         } else if (event.result === 'fieldersChoice') {
           // 野選: 打者は一塁（アウトは playイベントで処理）
           runners.first = { memberId: batterId, name: batter.name };
@@ -232,13 +230,13 @@ function processSimpleMode(event, batter, batterId, runners, state, inningScores
   } else if (result === 'walk' || result === 'hitByPitch') {
     pushRunners(batterId, batter.name, runners, state, inningScores, inning);
   } else if (result === 'error') {
-    // エラー出塁: 単打と同じ進塁
-    let runs = 0;
-    if (runners.third) runs++;
-    runners.third = runners.second;
-    runners.second = runners.first;
-    runners.first = { memberId: batterId, name: batter.name };
-    addInningScore(inningScores, inning, runs);
+    const base = getErrorReachedBase(event);
+    if (base === 'home') {
+      addInningScore(inningScores, inning, 1);
+    } else {
+      const asHit = { '1B': 'single', '2B': 'double', '3B': 'triple' }[base] || 'single';
+      placeBatterOnBase(asHit, batterId, batter.name, runners, state, inningScores, inning);
+    }
   } else if (result === 'sacrifice' || result === 'sacrificeFly') {
     // 犠打/犠飛: ランナーを一つ進塁
     let runs = 0;
@@ -292,6 +290,23 @@ function placeBatterOnBase(result, batterId, batterName, runners, state, inningS
   }
 
   addInningScore(inningScores, inning, runs);
+}
+
+function getErrorReachedBase(event) {
+  return event?.specialFlags?.errorReachedBase || '1B';
+}
+
+/** 詳細モード: 失策後の打者のみ指定塁へ配置（他ランナーは play で処理） */
+function placeErrorBatter(event, batterId, batterName, runners, state, inningScores, inning) {
+  const base = getErrorReachedBase(event);
+  if (base === 'home') {
+    addInningScore(inningScores, inning, 1);
+    return;
+  }
+  const runner = { memberId: batterId, name: batterName };
+  if (base === '1B') runners.first = runner;
+  else if (base === '2B') runners.second = runner;
+  else if (base === '3B') runners.third = runner;
 }
 
 /**

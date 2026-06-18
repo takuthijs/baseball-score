@@ -699,6 +699,14 @@
   margin-bottom: var(--space-md);
 }
 
+.result-buttons--3col {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.result-buttons--2col {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 .input-actions {
   display: flex;
   gap: var(--space-sm);
@@ -807,29 +815,95 @@
    FIELD DIAGRAM (打球方向)
    ──────────────────────────────────────── */
 .field-diagram {
-  width: 200px;
-  height: 200px;
-  margin: 0 auto;
-  position: relative;
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto var(--space-sm);
 }
 
 .field-svg {
   width: 100%;
-  height: 100%;
+  height: auto;
+  display: block;
+  touch-action: manipulation;
 }
 
-.field-zone {
-  fill: var(--color-bg-tertiary);
-  stroke: var(--color-border);
+.field-grass {
+  fill: #3dba4e;
+  stroke: #2a9e3a;
+  stroke-width: 1.5;
+}
+
+.field-hr {
+  fill: #c94c4c;
+  stroke: #a83d3d;
   stroke-width: 1;
-  cursor: pointer;
-  transition: fill var(--transition-fast);
 }
 
-.field-zone:active,
-.field-zone.selected {
-  fill: var(--color-primary-dim);
-  stroke: var(--color-primary);
+.field-hr-label {
+  fill: rgba(255, 255, 255, 0.85);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+  user-select: none;
+}
+
+.field-fence {
+  fill: none;
+  stroke: #f5d565;
+  stroke-width: 2.5;
+  pointer-events: none;
+}
+
+.field-dirt {
+  fill: #8b6914;
+  opacity: 0.85;
+}
+
+.field-line {
+  stroke: rgba(255, 255, 255, 0.7);
+  stroke-width: 1.5;
+}
+
+.field-pitcher-plate {
+  fill: #fff;
+  stroke: #333;
+  stroke-width: 0.8;
+}
+
+.field-home {
+  fill: #fff;
+  stroke: #333;
+  stroke-width: 1;
+  stroke-linejoin: miter;
+}
+
+.field-hit-area {
+  fill: transparent;
+  cursor: crosshair;
+}
+
+.field-pin {
+  fill: #e74c3c;
+  stroke: #fff;
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.field-pin-ring {
+  fill: none;
+  stroke: #e74c3c;
+  stroke-width: 1.5;
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.field-detected-label {
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  min-height: 1.4em;
+  margin-top: var(--space-xs);
 }
 
 /* ────────────────────────────────────────

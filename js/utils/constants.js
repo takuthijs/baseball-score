@@ -25,7 +25,7 @@ export const AT_BAT_RESULTS = [
   { id: 'lineout',        label: 'ライナー',    short: 'ライナー',    category: 'out',  emoji: '❌' },
   { id: 'walk',           label: '四球',       short: '四球',       category: 'walk', emoji: '🟢' },
   { id: 'hitByPitch',     label: '死球',       short: '死球',       category: 'walk', emoji: '🟢' },
-  { id: 'error',          label: 'エラー',     short: 'エラー',     category: 'error', emoji: '⚠️' },
+  { id: 'error',          label: '失策',       short: '失策',       category: 'error', emoji: '⚠️' },
   { id: 'fieldersChoice', label: '野選',       short: '野選',       category: 'out',  emoji: '🔶' },
   { id: 'sacrifice',      label: '犠打',       short: '犠打',       category: 'out',  emoji: '🔶' },
   { id: 'sacrificeFly',   label: '犠牲フライ', short: '犠牲フライ', category: 'out', emoji: '🔶' },
@@ -56,6 +56,18 @@ export const BASES = [
   { id: 'home', label: '本塁' },
 ];
 
+/** 失策後の打者進塁先 */
+export const ERROR_REACHED_BASES = [
+  { id: '1B', label: '一塁' },
+  { id: '2B', label: '二塁' },
+  { id: '3B', label: '三塁' },
+  { id: 'home', label: '本塁（得点）' },
+];
+
+export function getErrorReachedBaseLabel(baseId) {
+  return ERROR_REACHED_BASES.find((b) => b.id === baseId)?.label || baseId || '';
+}
+
 export const BATTED_BALL_POSITIONS = [
   { id: 'P', label: '投' },
   { id: 'C', label: '捕' },
@@ -78,6 +90,7 @@ export const BATTED_BALL_ZONES = [
   { id: 'center', label: 'センター方向' },
   { id: 'right-center', label: '右中間' },
   { id: 'right-line', label: 'ライト線' },
+  { id: 'homerun', label: 'ホームラン' },
   { id: 'foul', label: 'ファウルゾーン' },
 ];
 
@@ -86,7 +99,7 @@ export const RESULT_CATEGORIES = {
   homerun: { color: 'var(--color-homerun)', label: '本塁打' },
   out: { color: 'var(--color-out)', label: 'アウト' },
   walk: { color: 'var(--color-walk)', label: '四死球' },
-  error: { color: 'var(--color-error)', label: 'エラー' },
+  error: { color: 'var(--color-error)', label: '失策' },
 };
 
 /** 結果がヒット（出塁）か判定 */
@@ -125,6 +138,11 @@ export function getResultShort(result) {
 
 export function isBattedOutResult(result) {
   return ['groundout', 'flyout', 'lineout'].includes(result);
+}
+
+/** 打球位置（ピン）入力が必要な打席結果か */
+export function needsFieldDirection(result) {
+  return isBattedOutResult(result) || isHitResult(result) || result === 'doublePlay' || result === 'error';
 }
 
 export const DEFAULT_INNINGS = 7;
