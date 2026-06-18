@@ -7,7 +7,7 @@ import * as DB from '../db.js';
 
 export async function renderGameSetup(container, navigate, params = {}) {
   container.innerHTML = '';
-  
+
   const teamId = params.teamId;
   if (!teamId) {
     navigate('home');
@@ -20,9 +20,21 @@ export async function renderGameSetup(container, navigate, params = {}) {
   let opponentName = '';
   let innings = DEFAULT_INNINGS;
   let gameDate = new Date().toISOString().split('T')[0];
-  let lineup = []; // Array of member IDs in batting order
+  let lineup = []; // Array of member IDs (number) or guest IDs (string) in batting order
   let lineupPositions = {}; // { memberId: 'P' ... }
   let isHome = true; // 自チームがホーム（後攻）
+  let guestPlayers = []; // [{ id: 'guest_xxx', name: '田中' }]
+
+  function findMember(id) {
+    if (typeof id === 'string') return guestPlayers.find(g => g.id === id) || null;
+    return members.find(m => m.id === id) || null;
+  }
+
+  function displayName(id) {
+    const m = findMember(id);
+    if (!m) return '不明';
+    return typeof id === 'string' ? `${m.name} (助っ人)` : m.name;
+  }
 
   const page = el('div', { className: 'page-game-setup' }, [
     // Header
@@ -62,6 +74,7 @@ export async function renderGameSetup(container, navigate, params = {}) {
             lineup,
             lineupPositions,
             isHome,
+            guestPlayers,
             status: 'active',
           });
           
@@ -149,12 +162,17 @@ export async function renderGameSetup(container, navigate, params = {}) {
     // 打順リスト
     const lineupList = el('div', { className: 'lineup-list' });
     lineup.forEach((memberId, index) => {
-      const member = members.find(m => m.id === memberId);
+      const member = findMember(memberId);
       if (!member) return;
-      
-      const posLabel = POSITIONS.find(p => p.id === (lineupPositions[memberId] || ''))?.short || '';
-      
-      const item = el('div', { 
+      const isGuest = typeof memberId === 'string';
+      const nameLabel = isGuest
+        ? el('div', { className: 'lineup-player-name' }, [
+            el('span', { textContent: member.name }),
+            el('span', { className: 'guest-badge', textContent: '助っ人' }),
+          ])
+        : el('div', { className: 'lineup-player-name', textContent: member.name });
+
+      const item = el('div', {
         className: 'lineup-item',
         draggable: 'true',
         'data-index': String(index),
@@ -163,9 +181,9 @@ export async function renderGameSetup(container, navigate, params = {}) {
           el('span'), el('span'), el('span'),
         ]),
         el('div', { className: 'lineup-order', textContent: String(index + 1) }),
-        el('div', { className: 'lineup-player-name', textContent: member.name }),
+        nameLabel,
         createLineupPositionSelect(lineupPositions[memberId] || '', (val) => { lineupPositions[memberId] = val; }),
-        el('button', { 
+        el('button', {
           className: 'lineup-remove',
           textContent: '✕',
           onClick: () => {
@@ -211,27 +229,73 @@ export async function renderGameSetup(container, navigate, params = {}) {
     
     lineupSection.appendChild(lineupList);
 
-    // 未選択メンバー
+    // 未選択メンバー（チームメンバー＋助っ人）
     const availableMembers = members.filter(m => !lineup.includes(m.id));
-    if (availableMembers.length > 0) {
-      const availableSection = el('div', { style: { marginTop: 'var(--space-md)' } }, [
-        el('div', { className: 'input-label', textContent: 'タップして打順に追加' }),
-        el('div', { className: 'available-players' }, 
-          availableMembers.map(m => 
-            el('button', {
-              className: 'available-player-chip',
-              textContent: `${m.number ? '#' + m.number + ' ' : ''}${m.name}`,
-              onClick: () => {
-                lineup.push(m.id);
-                lineupPositions[m.id] = lineupPositions[m.id] || '';
-                renderBody();
-              },
-            })
-          )
+    const availableGuests = guestPlayers.filter(g => !lineup.includes(g.id));
+
+    if (availableMembers.length > 0 || availableGuests.length > 0) {
+      const chips = [
+        ...availableMembers.map(m =>
+          el('button', {
+            className: 'available-player-chip',
+            textContent: `${m.number ? '#' + m.number + ' ' : ''}${m.name}`,
+            onClick: () => {
+              lineup.push(m.id);
+              lineupPositions[m.id] = lineupPositions[m.id] || '';
+              renderBody();
+            },
+          })
         ),
-      ]);
-      lineupSection.appendChild(availableSection);
+        ...availableGuests.map(g =>
+          el('button', {
+            className: 'available-player-chip guest-chip',
+            onClick: () => {
+              lineup.push(g.id);
+              lineupPositions[g.id] = lineupPositions[g.id] || '';
+              renderBody();
+            },
+          }, [
+            el('span', { textContent: g.name }),
+            el('span', { className: 'guest-badge', textContent: '助っ人' }),
+          ])
+        ),
+      ];
+      lineupSection.appendChild(el('div', { style: { marginTop: 'var(--space-md)' } }, [
+        el('div', { className: 'input-label', textContent: 'タップして打順に追加' }),
+        el('div', { className: 'available-players' }, chips),
+      ]));
     }
+
+    // 助っ人追加フォーム
+    const nameInput = el('input', {
+      className: 'input-field guest-name-input',
+      type: 'text',
+      placeholder: '名前を入力',
+    });
+    const addGuestBtn = el('button', {
+      className: 'btn btn-secondary btn-sm guest-add-btn',
+      textContent: '＋ 追加',
+      onClick: () => {
+        const name = (nameInput.value || '').trim();
+        if (!name) { showToast('名前を入力してください', 'error'); return; }
+        const id = `guest_${Date.now()}`;
+        guestPlayers.push({ id, name });
+        lineup.push(id);
+        lineupPositions[id] = lineupPositions[id] || '';
+        renderBody();
+      },
+    });
+    // Enterキーでも追加できるようにする
+    nameInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') addGuestBtn.click();
+    });
+    const guestAddRow = el('div', { className: 'guest-add-row' });
+    guestAddRow.appendChild(nameInput);
+    guestAddRow.appendChild(addGuestBtn);
+    lineupSection.appendChild(el('div', { className: 'guest-add-section' }, [
+      el('div', { className: 'input-label', style: { marginBottom: 'var(--space-xs)' }, textContent: '助っ人を追加' }),
+      guestAddRow,
+    ]));
 
     body.appendChild(lineupSection);
   }

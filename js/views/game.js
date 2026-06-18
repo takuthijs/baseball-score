@@ -41,6 +41,14 @@ export async function renderGame(container, navigate, params = {}) {
   if (!currentGame) { navigate('home'); return; }
   currentTeam = await DB.getTeam(currentGame.teamId);
   currentMembers = await DB.getMembers(currentGame.teamId);
+  // 助っ人をメンバーリストに追加（名前に "(助っ人)" を付与）
+  const guestMembers = (currentGame.guestPlayers || []).map(g => ({
+    id: g.id,
+    name: `${g.name} (助っ人)`,
+    number: '',
+    teamId: currentGame.teamId,
+  }));
+  currentMembers = [...currentMembers, ...guestMembers];
 
   const page = el('div', { className: 'page-game', style: { display: 'flex', flexDirection: 'column', height: '100dvh' } }, [
     el('div', { className: 'game-status-bar', id: 'status-bar' }),
